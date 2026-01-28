@@ -468,10 +468,12 @@ def do_homodimer_pipeline(
 
     # check if there has repeat sequences
     existing_sequences = set()
-    sequence_lib_unique = {
-        k: v for k, v in mutated_dict.items()
-        if v not in existing_sequences and not existing_sequences.add(v)
-    }
+    existing_sequences = set()
+    sequence_lib_unique = {}
+    for k, v in mutated_dict.items():
+        if v not in existing_sequences:
+            sequence_lib_unique[k] = v
+            existing_sequences.add(v)
 
     # 4.1 Save unique sequences to JSON
     with open("mutated_homodimer_sequences.json", "w") as f:
