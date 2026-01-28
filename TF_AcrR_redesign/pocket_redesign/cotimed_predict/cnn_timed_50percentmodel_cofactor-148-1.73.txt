@@ -1,0 +1,10 @@
+ignore_uncommon False
+include_pdbs
+##########
+pose1 382
+pose2 382
+pose3 382
+pose5 382
+pose6 382
+pose7 382
+pose8 382
