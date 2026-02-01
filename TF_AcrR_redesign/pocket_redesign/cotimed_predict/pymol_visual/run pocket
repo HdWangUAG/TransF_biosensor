@@ -1,0 +1,5 @@
+python pocket_rmsd.py \
+--ref AcrR_apo.pdb \
+--mob AcrR_56_model_0.pdb \
+--pocket-resi "A:110-115" \
+--atom-set ca \
