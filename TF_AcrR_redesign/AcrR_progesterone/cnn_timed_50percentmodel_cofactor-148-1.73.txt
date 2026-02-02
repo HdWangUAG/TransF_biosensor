@@ -1,0 +1,4 @@
+ignore_uncommon False
+include_pdbs
+##########
+AcrR_STR 19656
