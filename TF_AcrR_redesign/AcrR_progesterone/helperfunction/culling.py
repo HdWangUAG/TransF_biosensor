@@ -156,6 +156,7 @@ def plot_quality_distributions(merged_df_process):
     plt.xlabel('Quality Score')
     plt.ylabel('Frequency')
     plt.legend()
+
     plt.grid(axis='y', alpha=0.75)
     #plt.savefig('complex_quality_distribution.png')
 

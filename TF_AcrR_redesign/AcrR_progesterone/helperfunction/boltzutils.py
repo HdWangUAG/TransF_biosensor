@@ -24,7 +24,9 @@ import yaml
 from Bio import SeqIO
 import json
 import pandas as pd
-
+import numpy as np
+from typing import List, Dict, Optional
+from pathlib import Path
 
 
 
@@ -37,7 +39,7 @@ import pandas as pd
 ##############################section1 for Boltz PDB preparation and alignment####################################
 ##################################################################################################################
 
-def fasta_to_boltz_yaml(fasta_file, output_yaml, ligand_smiles=None, binder_id=None):
+def fasta_to_boltz_yaml(fasta_file: str, output_yaml: str, ligand_smiles: Optional[str] = None, binder_id: Optional[str] = None) -> None:
     """
     Strictly convert FASTA to Boltz2 YAML with exact template matching.
     
@@ -308,144 +310,141 @@ def prase_boltz_affinity_results(pdb_boltz_folder: str, prot_name: str):
     with open(json_file, 'w') as f:
         json.dump(score_all, f, indent=4)
 
+CONF_KEYS = [
+    "confidence_score", "ptm", "iptm", "ligand_iptm", "protein_iptm",
+    "complex_plddt", "complex_iplddt", "complex_pde", "complex_ipde",
+]
 
-def prase_boltz_confidence_results(pdb_boltz_folder: str, prot_name: str,wt_pdb: str):
+
+def _safe_mean(vals: List[float]) -> Optional[float]:
+    if not vals:
+        return None
+    arr = np.asarray(vals, dtype=float)
+    if arr.size == 0:
+        return None
+    return float(np.nanmean(arr))
+
+def prase_boltz_confidence_results(pdb_boltz_folder: str, prot_name: str, wt_pdb: str):
     """
-    Parse Boltz confidence results from a given folder and save them to a CSV file.
-    
-    Args:
-        pdb_boltz_folder (str): The path to the folder containing Boltz predictions.
-        prot_name (str): The name of the protein, e.g. '1flm'.
-        
-    Returns:
-        writes a CSV file with the results in the format:
-        prot_name, confidence_pred_value, confidence_probability_binary
+    Parse confidence_* results under each subfolder's 'predictions' directory.
+    Averages metrics across all matching confidence_* entries per subfolder.
+
+    Outputs:
+      - {prot_name}_confidence_results.csv (aggregated means per subfolder)
+      - {prot_name}_confidence_results.json (same content as a dict)
+      - {prot_name}_confidence_errors.csv (rows that failed/empty)
     """
-    # get subfolders in the folder
+    pdb_boltz_folder = str(pdb_boltz_folder)
     subfolders = [f.path for f in os.scandir(pdb_boltz_folder) if f.is_dir()]
+    subfolders = sorted(subfolders)
 
-    
-    # direct to the predictions folder
     error_df = pd.DataFrame(columns=["prot", "error"])
-    score_all = {}  # to collect all scores
+    score_all: Dict[str, Dict] = {}
+
     for sub_path in subfolders:
-    
-        name_prefix = sub_path.split("/")[-1]  # get the name of the subfolder, e.g. 1flm_hcy12_87
-    
-    # crate a dictionary to store the scores for this protein
-        if name_prefix not in score_all:
-            score_all[name_prefix] = {}
+        name_prefix = Path(sub_path).name  # e.g., 1flm_hcy12_87
+        score_all.setdefault(name_prefix, {})
+        # under sub_path, there is dir using the name,
+        predictions_path_upper = os.path.join(sub_path, "predictions")
+        working_path = os.listdir(predictions_path_upper)
+        predict_path = Path(predictions_path_upper) / working_path[0]
 
-        # read affinity json file which starts with "confidence_"
-        predict_path = os.path.join(sub_path, "predictions")
-        print(predict_path)
-        confidence_files = os.listdir(predict_path)
+        print(f"Looking for predictions in: {predict_path}")
 
-
-        try:
-            confidence_files_real = os.path.join(predict_path, confidence_files[0])
-            print(f'processing {confidence_files_real}')
-
-            #get json under current path 
-
-            confidence_json = [json_file for json_file in os.listdir(confidence_files_real) if json_file.startswith("confidence_")]
-            print(confidence_json)
-            # get the absolute path of the first confidence file
-            confidence_file_path = os.path.join(confidence_files_real, confidence_json[0])
-
-            # get mut_plddt from e.g. plddt_1flm_HCY1_1_model_0.npz
-
-            plddt_file = [f for f in os.listdir(confidence_files_real) if f.startswith("plddt_") and f.endswith(".npz")][0]
-            plddt_file_path = os.path.join(confidence_files_real, plddt_file)
-            # get the absolute path of the clean pdb file
-            clean_pdb = [pdb for pdb in os.listdir(confidence_files_real) if pdb.endswith("cleanH.pdb")][0]
-            if clean_pdb:
-                print(f"clean pdb found in {confidence_files_real}")
-            
-
-            clean_pdb_path = os.path.join(confidence_files_real, clean_pdb)
-            mean_plddt,plddt_info = eval_mut_comb.parse_prot_mut_plddt(wt_pdb,clean_pdb_path,plddt_file_path)
-            # format convert to float which json could handle
-            mean_plddt = float(mean_plddt)
-            print(f'the mutation residues plddt:{mean_plddt}')
-        
-
-
-        except IndexError:
-            print(f"No confidence files found in {predict_path}. Skipping...")
-            df_temp = pd.DataFrame({"prot": [name_prefix], "error": "No confidence files found"})
-            error_df = pd.concat([error_df, df_temp], ignore_index=True)
-            error_df.to_csv(os.path.join(pdb_boltz_folder, f"{prot_name}_confidence_errors.csv"), index=False)
+        if not os.path.isdir(predictions_path_upper):
+            msg = f"Missing predictions/ in {predictions_path_upper}"
+            print(f"[WARN] {msg}")
+            error_df = pd.concat([error_df, pd.DataFrame({"prot": [name_prefix], "error": [msg]})],
+                                 ignore_index=True)
             continue
-        
-        with open(confidence_file_path, 'r') as f:
-            data = json.load(f)
-            
-            '''format example:
-            {
-                "confidence_score": 0.9044749140739441,
-                "ptm": 0.9727789759635925,
-                "iptm": 0.9606924653053284,
-                "ligand_iptm": 0.9073277115821838,
-                "protein_iptm": 0.9740676283836365,
-                "complex_plddt": 0.8904205560684204,
-                "complex_iplddt": 0.6828215718269348,
-                "complex_pde": 0.42622411251068115,
-                "complex_ipde": 1.2924869060516357,
-                "chains_ptm": {
-                    "0": 0.9874409437179565,
-                    "1": 0.987598180770874,
-                    "2": 0.873214602470398
-                },
-                "pair_chains_iptm": {
-                    "0": {
-                        "0": 0.9874409437179565,
-                        "1": 0.9740676283836365,
-                        "2": 0.5299190878868103
-                    },
-                    "1": {
-                        "0": 0.9732728600502014,
-                        "1": 0.987598180770874,
-                        "2": 0.510820209980011
-                    },
-                    "2": {
-                        "0": 0.9073277115821838,
-                        "1": 0.8966872692108154,
-                        "2": 0.873214602470398
-                    }
-                }
-            }   we will extract confidence score, ptm, iptm, ligand_iptm, protein_iptm, complex_plddt, complex_iplddt, complex_pde, complex_ipde'''
-    
-            confidence_score = data["confidence_score"]
-            ptm = data["ptm"]
-            iptm = data["iptm"]
-            ligand_iptm = data["ligand_iptm"]
-            protein_iptm = data["protein_iptm"]
-            complex_plddt = data["complex_plddt"]
-            complex_iplddt = data["complex_iplddt"]
-            complex_pde = data["complex_pde"]
-            complex_ipde = data["complex_ipde"]
 
-            #collect all values if exists
-            score_all[name_prefix]["confidence_score"] = confidence_score
-            score_all[name_prefix]["ptm"] = ptm
-            score_all[name_prefix]["iptm"] = iptm
-            score_all[name_prefix]["ligand_iptm"] = ligand_iptm
-            score_all[name_prefix]["protein_iptm"] = protein_iptm
-            score_all[name_prefix]["complex_plddt"] = complex_plddt
-            score_all[name_prefix]["complex_iplddt"] = complex_iplddt
-            score_all[name_prefix]["complex_pde"] = complex_pde
-            score_all[name_prefix]["complex_ipde"] = complex_ipde
-            score_all[name_prefix]["mean_mut_plddt"] = mean_plddt
+        # Find all entries starting with "confidence_" inside predictions/
+        entries = [e for e in os.scandir(predict_path) if e.name.startswith("confidence_")]
+        if not entries:
+            msg = f"No entries starting with 'confidence_' in {predict_path}"
+            print(f"[WARN] {msg}")
+            error_df = pd.concat([error_df, pd.DataFrame({"prot": [name_prefix], "error": [msg]})],
+                                 ignore_index=True)
+            continue
 
-    # generate a csv file with the results
-    csv_file = os.path.join(pdb_boltz_folder, f"{prot_name}_confidence_results.csv")
-    df_scores = pd.DataFrame.from_dict(score_all, orient='index')
-    df_scores.to_csv(csv_file, index_label='prot_name')
-    # or write them into json file
-    json_file = os.path.join(pdb_boltz_folder, f"{prot_name}_confidence_results.json")
-    with open(json_file, 'w') as f:
+        print(f"processing {predict_path}, found {len(entries)} 'confidence_' entries")
+
+        # Accumulate metrics across all model JSONs
+        accum = {k: [] for k in CONF_KEYS}
+        used_models = 0
+
+        for e in sorted(entries, key=lambda x: x.name):
+            json_path = None
+
+            if e.is_file() and e.name.endswith(".json"):
+                # e.g., predictions/confidence_..._model_0.json
+                json_path = e.path
+            elif e.is_dir():
+                # Prefer a JSON starting with confidence_ inside this directory
+                files = [f for f in os.listdir(e.path) if f.endswith(".json")]
+                prefer = [f for f in files if f.startswith("confidence_")]
+                pick = prefer[0] if prefer else (files[0] if files else None)
+                if pick:
+                    json_path = os.path.join(e.path, pick)
+
+            if not json_path:
+                print(f"[WARN] No JSON found for {e.name}, skipping.")
+                continue
+
+            try:
+                with open(json_path, "r") as f:
+                    data = json.load(f)
+                for k in CONF_KEYS:
+                    if k in data:
+                        try:
+                            accum[k].append(float(data[k]))
+                        except Exception:
+                            pass
+                used_models += 1
+            except Exception as ex:
+                print(f"[WARN] Failed reading {json_path}: {ex}")
+
+        if used_models == 0:
+            msg = f"No readable confidence JSONs under entries in {predict_path}"
+            print(f"[WARN] {msg}")
+            error_df = pd.concat([error_df, pd.DataFrame({"prot": [name_prefix], "error": [msg]})],
+                                 ignore_index=True)
+            continue
+
+        avg_metrics = {k: _safe_mean(v) for k, v in accum.items()}
+        avg_metrics["n_models"] = int(used_models)
+
+        score_all[name_prefix].update(avg_metrics)
+        print(f"Averages for {name_prefix} over {used_models} model(s): "
+              f"confidence_score={avg_metrics.get('confidence_score')}")
+
+    # Write aggregated results
+    out_csv = os.path.join(pdb_boltz_folder, f"{prot_name}_confidence_results.csv")
+    df_scores = pd.DataFrame.from_dict(score_all, orient="index")
+    df_scores.index.name = "prot_name"
+    df_scores.to_csv(out_csv)
+
+    out_json = os.path.join(pdb_boltz_folder, f"{prot_name}_confidence_results.json")
+    with open(out_json, "w") as f:
         json.dump(score_all, f, indent=4)
+
+    out_err = os.path.join(pdb_boltz_folder, f"{prot_name}_confidence_errors.csv")
+    if not error_df.empty:
+        error_df.to_csv(out_err, index=False)
+    else:
+        # ensure old error file doesn't mislead
+        if os.path.exists(out_err):
+            try:
+                os.remove(out_err)
+            except OSError:
+                pass
+
+    print(f"Wrote: {out_csv}")
+    print(f"Wrote: {out_json}")
+    if not error_df.empty:
+        print(f"Wrote: {out_err}")
+    else:
+        print("No errors encountered.")
 
 
 
