@@ -1,6 +1,6 @@
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 # updating by hdwang on 20250715
-# formatting boltz yaml 20260113
+# formatting boltz yaml 20260205
 import os
 import sys
 
